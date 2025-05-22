@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>ACR1255 NFC UID 확인 및 읽기</title></head>
+<body>
+  <h2>🔄 NFC 카드 인식 + 읽기 테스트</h2>
+  <button id="connect">리더기 연결</button>
+  <button id="uid">UID 확인</button>
+  <button id="read">블록 4 읽기 (MIFARE)</button>
+  <pre id="log"></pre>
+
+<script>
+let device;
+
+function log(msg) {
+  document.getElementById('log').textContent += msg + '\n';
+}
+
+document.getElementById('connect').onclick = async () => {
+  try {
+    device = await navigator.usb.requestDevice({ filters: [{ vendorId: 0x072F }] });
+    await device.open();
+    await device.selectConfiguration(1);
+    await device.claimInterface(0);
+    log("✅ 리더기 연결됨");
+  } catch (e) {
+    log("❌ 연결 실패: " + e);
+  }
+};
+
+document.getElementById('uid').onclick = async () => {
+  if (!device) return log("먼저 리더기를 연결하세요.");
+  const cmd = new Uint8Array([0xFF, 0xCA, 0x00, 0x00, 0x00]); // GET DATA - UID
+  try {
+    await device.transferOut(2, cmd);
+    const result = await device.transferIn(1, 64);
+    const data = new Uint8Array(result.data.buffer);
+    if (data[data.length - 2] === 0x90) {
+      log("📌 카드 UID: " + Array.from(data.slice(0, -2)).map(b => b.toString(16).padStart(2, "0")).join(" "));
+    } else {
+      log("⚠️ 카드 미감지 혹은 응답 오류");
+    }
+  } catch (e) {
+    log("❌ UID 요청 실패: " + e);
+  }
+};
+
+document.getElementById('read').onclick = async () => {
+  if (!device) return log("먼저 리더기를 연결하세요.");
+  const block = 4;
+  const key = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+
+  const authCmd = new Uint8Array([
+    0xFF, 0x86, 0x00, 0x00, 0x05,
+    0x01, 0x00, block, 0x60, 0x00, // Key A
+    ...key
+  ]);
+  const readCmd = new Uint8Array([0xFF, 0xB0, 0x00, block, 16]);
+
+  try {
+    await device.transferOut(2, authCmd);
+    const authResp = await device.transferIn(1, 64);
+    const authOk = new Uint8Array(authResp.data.buffer);
+    if (authOk.slice(-2).toString() !== "144,0") {
+      return log("❌ 블록 인증 실패");
+    }
+
+    await device.transferOut(2, readCmd);
+    const result = await device.transferIn(1, 64);
+    const data = new Uint8Array(result.data.buffer);
+    if (data[data.length - 2] === 0x90) {
+      const blockData = data.slice(0, 16);
+      log("📖 블록 " + block + " 읽기: " + blockData.map(b => b.toString(16).padStart(2, "0")).join(" "));
+    } else {
+      log("❌ 블록 읽기 실패");
+    }
+  } catch (e) {
+    log("❌ 읽기 오류: " + e);
+  }
+};
+</script>
+</body>
+</html>
